@@ -213,6 +213,7 @@
   "Identifies a node and its encoding."
   name
   encoding
+  ;; processes in the linked set will receive messages on error or disconnect
   linked-set)
 
 (defstruct (socket-node-info (:include node-info))
@@ -379,10 +380,14 @@
   (make-thread/synchronized (lambda () (accept-thread port encoding))
 			    :name (format NIL "DISTLISP-ACCEPT-~D" port)))
 
-(defun connect (name host &optional (port 2000) (encoding :sexp))
-  "Connects this node to another node on PORT under NAME."
+(defun connect (name host &key (port 2000) (encoding :sexp) linked)
+  "Connects this node to another node on PORT under NAME.  If LINKED is
+set, the connecting process gets added to the list of linked processes
+for the node."
   (let ((node (%connect host port encoding)))
     (setf (node-info-name node) name)
+    (when linked
+      (push *current-pid* (node-info-linked-set node)))
     (with-nodes
       (add-node node))
     node))
@@ -390,12 +395,15 @@
 ;;; en- and decoding methods
 
 (defmethod encode ((encoding (eql :sexp)) stream message)
-  (write message :stream stream)
-  (terpri stream)
-  (finish-output stream))
+  (with-standard-io-syntax
+    (let ((*print-circle* T))
+      (write message :stream stream)
+      (terpri stream)
+      (finish-output stream))))
 
 (defmethod decode ((encoding (eql :sexp)) stream)
-  (read stream))
+  (with-standard-io-syntax
+    (read stream)))
 
 (defmethod encode ((encoding (eql :clstore)) stream message)
   (cl-store:store message stream)
@@ -419,15 +427,14 @@
       (push info *processes*))))
 
 (defun quit-root ()
+  "Stops the node process."
   (route-local root-pid *current-pid* :QUIT))
 
 (defun stop-environment (&optional (timeout 3))
   (flet ((kill-nodes ()
-	   (with-nodes (dolist (node *nodes*)
-			 (quit-node node))))
+	   (with-nodes (mapcar #'quit-node *nodes*)))
 	 (kill-processes ()
-	   (with-processes (dolist (process *processes*)
-			     (quit-process process)))))
+	   (with-processes (mapcar #'quit-process *processes*))))
     (quit-root)
     (kill-nodes)
     (kill-processes)
