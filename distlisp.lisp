@@ -3,23 +3,40 @@
 (in-package #:cl-user)
 
 (defpackage #:distlisp
-  (:use #:cl #:logv #:utils-frahm #:anaphora #:fare-matcher #:bordeaux-threads))
+  (:use #:cl #:logv #:utils-frahm #:anaphora #:fare-matcher #:bordeaux-threads)
+  (:export #:init-environment #:stop-environment
+	   #:spawn
+	   #:%send
+	   #:%receive #:%receive-nowait))
 
 (in-package #:distlisp)
 
 ;;;; utilities
 
-(defun make-counter (limit &optional (lower 0) (initial (1- limit)))
-  (when (>= lower limit)
-    (error "LIMIT has to be bigger than LOWER (~D >= ~D" lower limit))
-  (lambda () (if (= initial (1- limit)) (setq initial lower) (incf initial))))
+;; (defun make-counter (limit &optional (lower 0) (initial (1- limit)))
+;;   (when (>= lower limit)
+;;     (error "LIMIT has to be bigger than LOWER (~D >= ~D" lower limit))
+;;   (lambda () (if (= initial (1- limit)) (setq initial lower) (incf initial))))
+
+;; (defun counter-next (counter)
+;;   (funcall counter))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun make-counter (limit &optional (lower 0) (initial (1- limit)))
+    (when (>= lower limit)
+      (error "LIMIT has to be bigger than LOWER (~D >= ~D" lower limit))
+    (vector initial limit lower)))
 
 (defun counter-next (counter)
-  (funcall counter))
+  (if (= (svref counter 0) (1- (svref counter 1)))
+      (setf (svref counter 0) (svref counter 2))
+      (incf (svref counter 0))))
 
+(defconstant default-distlisp-bindings `((*package* . ,(lambda () #.(find-package :DISTLISP)))))
+
 (let ((lock (make-lock))
       (sync (make-condition-variable)))
-  (defun make-thread/synchronized (fun &key name (initial-bindings *default-special-bindings*)
+  (defun make-thread/synchronized (fun &key name (initial-bindings default-distlisp-bindings)
 				   init)
     "Creates a new thread and returns if it's running."
     (with-lock-held (lock)
@@ -70,29 +87,32 @@
 
 ;;; helper functions
 
-(defun current-indeque ()
-  (mailbox-indeque (process-info-mailbox *current-process*)))
-
 (defstruct process-info
   "Has information about a local process."
   pid
   (mailbox (make-mailbox))
-  linked
+  linked-set
+  traps-exit
   )
 
+(defun current-indeque ()
+  (mailbox-indeque (process-info-mailbox *current-process*)))
+
 (defstruct (thread-process-info (:include process-info))
   "Additional information for a thread based process."
   thread)
 
-(defun make-pid-counter ()
-  "Returns a counter useful for counting PIDs."
-  (make-counter (ash 1 counter-size) 1))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun make-pid-counter ()
+    "Returns a counter useful for counting PIDs."
+    (make-counter (ash 1 counter-size) 1)))
 
-(let ((pid-counter (make-pid-counter)))
-  (defstruct pid
-    "Identifies a process relative to the local node."
-    (id (counter-next pid-counter))
-    node))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (let ((pid-counter (make-pid-counter)))
+    (defstruct pid
+      "Identifies a process relative to the local node."
+      (id (counter-next pid-counter))
+      node)))
 
 (defun find-process (pid)
   "Searches *PROCESSES* by PID."
@@ -113,7 +133,7 @@
 		       (with-processes
 			 (setf (thread-process-info-thread process-info) (current-thread))
 			 (when linked
-			   (push pid (process-info-linked process-info)))
+			   (push pid (process-info-linked-set process-info)))
 			 (push process-info *processes*)
 			 (condition-notify sync))
 		       (unwind-protect
@@ -125,10 +145,10 @@
 				    (return)))))
 			 (with-processes
 			   (setf *processes* (delete process-info *processes*))
-			   ;; (mapcar #'send-exit (process-info-linked process-info))
+			   (mapcar #'send-exit (process-info-linked-set process-info))
 			   )))
 		     :name name
-		     :initial-bindings `((*package* . ,(lambda () *package*))))
+		     :initial-bindings default-distlisp-bindings)
 	(condition-wait sync *processes-lock*))
       pid)))
 
@@ -138,7 +158,7 @@
 (defun %link (pid &optional (process *current-process*))
   (awhen (find-process pid)
     (etypecase it
-      (thread-process-info (push (process-info-pid process) (process-info-linked it))))))
+      (thread-process-info (push (process-info-pid process) (process-info-linked-set it))))))
 
 ;;; method primitives
 
@@ -213,6 +233,46 @@
   "Returns a generalized boolean whether NODE is still valid to our knowledge."
   (member node *nodes* :test #'eq))
 
+(defun %write-node (node message encoding)
+  (etypecase node
+    (socket-node-info (encode encoding (socket-node-info-stream node) message))))
+
+(defun %wrap-local (message from)
+  "<MESSAGE> . FROM"
+  (cons message from))
+
+(defun route-remote (to from message)
+  (check-type to pid)
+  (check-type from pid)
+  (let* ((node (pid-node to))
+	 (encoding (node-info-encoding node)))
+    (if (with-nodes (valid-node? node))
+	(progn (%write-node node (%wrap-remote to message from) encoding)
+	       T)
+	(warn "remote process ~A on node ~A not valid, discarded"
+	      (pid-id to) node))))
+
+(defun route-local (to from message)
+  (check-type to pid)
+  (check-type from pid)
+  (aif (with-processes (find-process to))
+       (progn (enqueue (mailbox-indeque (process-info-mailbox it))
+		       (%wrap-local message from))
+	      T)
+       (warn "local process ~A not found, discarded" (pid-id to))))
+
+(defun %send (to message &optional (from *current-pid*))
+  "Queues a message for asynchronously sending it to another process."
+  (check-type to pid)
+  (if (pid-node to)
+      (route-remote to from message)
+      (route-local to from message)))
+
+(defun %send-node (node message &optional (from *current-pid*))
+  "Queues a message for asynchronously sending it to the handler process at NODE."
+  (check-type node node-info)
+  (route-remote (make-root-pid node) from message))
+
 (define-condition abort-thread-condition (condition)
   ())
 
@@ -236,43 +296,29 @@
       (remove-node node)
       (close stream))))
 
-(defun %wrap-local (message from)
-  "<MESSAGE> . FROM"
-  (cons message from))
+(defun abort-thread (thread)
+  (interrupt-thread thread (lambda () (signal 'abort-thread-condition))))
 
-(defun node-thread (&aux done)
-  (handler-case
-      (loop until done
-	 do (destructuring-bind (message . from) (%receive)
-	      (cond 
-		((atom (logv message))
-		 (case message
-		   ;; only local processes may terminate this thread
-		   (:QUIT (unless (pid-node from)
-			    (setq done T)))
-		   ;; only remote nodes can be disconnected
-		   (:DISCONNECT (awhen (pid-node from)
-				  (quit-node it)))))
-		((listp message)
-		 (case (car message)
-		   (:SPAWN (spawn :local
-				  (destructuring-bind (op num fun) message
-				    (lambda ()
-				      (%send from `(:SPAWNED ,num))
-				      (funcall (eval fun)))))))))))
-    (abort-thread-condition () (setq done T))))
+(defun quit-node (node)
+  ;; the node is removed inside the reader thread
+  (abort-thread (socket-node-info-thread node)))
 
 (defun make-connect-thread (socket name encoding &optional (stream socket))
-  (let* ((node (make-socket-node-info :encoding encoding :socket socket :stream stream))
-	 (thread (make-thread/synchronized
-		  (lambda ()
-		    (setf (iolib:fd-non-blocking socket) T)
-		    (reader-thread node encoding stream))
-		  :name name
-		  :initial-bindings `((*package* . ,(lambda () *package*)))
-		  :init (lambda ()
-			  (setf (socket-node-info-thread node) (current-thread))))))
+  (let ((node (make-socket-node-info :encoding encoding :socket socket :stream stream)))
+    (make-thread/synchronized (lambda ()
+				(setf (iolib:fd-non-blocking socket) T)
+				(reader-thread node encoding stream))
+			      :name name
+			      :init (lambda ()
+				      (setf (socket-node-info-thread node)
+					    (current-thread))))
     node))
+
+(defun make-client-socket (host port)
+  (iolib:make-socket :ipv6 NIL
+		     :reuse-address T
+		     :remote-host host
+		     :remote-port port))
 
 (defun %connect (host port encoding)
   "Connects this node to another node and returns a handle if successful."
@@ -281,6 +327,7 @@
 		       encoding))
 
 (defun node-acceptor (server fd event exception encoding)
+  "Handles a connection attempt and starts the reader thread for it."
   (let* ((socket (iolib.sockets:accept-connection server))
 	 (node (make-connect-thread socket
 				    (format NIL "DISTLISP-READER-~A-~D"
@@ -320,28 +367,14 @@
 	  (close base)))
     (abort-thread-condition () (setq done T))))
 
-(defun abort-thread (thread)
-  (interrupt-thread thread (lambda () (signal 'abort-thread-condition))))
-
 (defun quit-process (process)
   (etypecase process
     (thread-process-info (abort-thread (thread-process-info-thread process)))))
 
-(defun quit-node (node)
-  ;; the node is removed inside the reader thread
-  (abort-thread (socket-node-info-thread node)))
-
 ;; TODO: register started server threads somewhere
 (defun start-server (&optional (port 2000) (encoding :sexp))
   (make-thread/synchronized (lambda () (accept-thread port encoding))
-			    :name (format NIL "DISTLISP-ACCEPT-~D" port)
-			    :initial-bindings `((*package* . ,(lambda () *package*)))))
-
-(defun make-client-socket (host port)
-  (iolib:make-socket :ipv6 NIL
-		     :reuse-address T
-		     :remote-host host
-		     :remote-port port))
+			    :name (format NIL "DISTLISP-ACCEPT-~D" port)))
 
 (defun connect (name host &optional (port 2000) (encoding :sexp))
   "Connects this node to another node on PORT under NAME."
@@ -368,42 +401,6 @@
 (defmethod decode ((encoding (eql :clstore)) stream)
   (cl-store:restore stream))
 
-(defun %write-node (node message encoding)
-  (etypecase node
-    (socket-node-info (encode encoding (socket-node-info-stream node) message))))
-
-(defun route-remote (to from message)
-  (check-type to pid)
-  (check-type from pid)
-  (let* ((node (pid-node to))
-	 (encoding (node-info-encoding node)))
-    (if (with-nodes (valid-node? node))
-	(progn (%write-node node (%wrap-remote to message from) encoding)
-	       T)
-	(warn "remote process ~A on node ~A not valid, discarded"
-	      (pid-id to) node))))
-
-(defun route-local (to from message)
-  (check-type to pid)
-  (check-type from pid)
-  (aif (with-processes (find-process to))
-       (progn (enqueue (mailbox-indeque (process-info-mailbox it))
-		       (%wrap-local message from))
-	      T)
-       (warn "local process ~A not found, discarded" (pid-id to))))
-
-(defun %send (to message &optional (from *current-pid*))
-  "Queues a message for asynchronously sending it to another process."
-  (check-type to pid)
-  (if (pid-node to)
-      (route-remote to from message)
-      (route-local to from message)))
-
-(defun %send-node (node message &optional (from *current-pid*))
-  "Queues a message for asynchronously sending it to the handler process at NODE."
-  (check-type node node-info)
-  (route-remote (make-root-pid node) from message))
-
 ;;;; initialisation
 
 (defun register-current-thread ()
@@ -421,43 +418,36 @@
 (defun quit-root ()
   (route-local root-pid *current-pid* :QUIT))
 
-(defun init-environment (&optional (timeout 3))
-  (flet ((root-alivep ()
-	   (with-processes (find-process #1=root-pid))))
-    (with-processes (register-current-thread))
-    (awhen (root-alivep)
-      (quit-root))
-    (when (root-alivep)
-      (sleep timeout)
-      (quit-root))
-    (if (root-alivep)
-	NIL
-	(progn (%spawn-thread #'node-thread :pid #1# :name "DISTLISP-ROOT") T))))
-
 (defun stop-environment (&optional (timeout 3))
   (flet ((kill-nodes ()
-	   (with-nodes (dolist (node *nodes*) (quit-node node))))
+	   (with-nodes (dolist (node *nodes*)
+			 (quit-node node))))
 	 (kill-processes ()
-	   (with-processes (dolist (process *processes*) (quit-process process)))))
+	   (with-processes (dolist (process *processes*)
+			     (quit-process process)))))
     (quit-root)
     (kill-nodes)
     (kill-processes)
-    (when (or (with-processes *processes*) (with-nodes *nodes*))
+    (when (or #1=(with-processes *processes*) #2=(with-nodes *nodes*))
       (sleep timeout)
       (kill-nodes)
-      (kill-processes))))
+      (kill-processes))
+    (when #1#
+      (warn "some processes still alive"))
+    (when #2#
+      (warn "some nodes still connected"))))
 
 ;;;; macros and convenience functions based on the previous APIs
 
 (let ((counter (make-pid-counter)))
-  (defun %spawn-remote (node fun)
+  (defun %spawn-remote (node fun &optional linked)
     (let ((num (counter-next counter)))
-      (%send (make-root-pid node) `(:SPAWN ,num ,fun))
+      (%send (make-root-pid node) `(:SPAWN ,num ,linked ,fun))
       (cdr (%receive-match (lambda (message from)
 			     (and (eq (car message) :SPAWNED)
 				  (= (cadr message) num))))))))
 
-(defmacro! spawn (target fun)
+(defmacro! spawn ((target &optional linked) &body fun)
   "Spawns lambda form FUN at TARGET.
 
 TARGET can be of type (OR NULL KEYWORD NODE-INFO).
@@ -465,25 +455,68 @@ TARGET can be of type (OR NULL KEYWORD NODE-INFO).
 If TARGET is a keyword, :LOCAL specifies thread spawning."
   (cond
     ;; this should become a load balancer or something strategy dependent (?!)
-    ((null target)
-     `(%spawn-thread ,fun))
+    ;; ((null target)
+    ;;  `(%spawn-thread (lambda () ,@fun) :linked ,linked))
     ((keywordp target)
      (ematch target
-       (:local `(%spawn-thread ,fun))))
+       (:local `(%spawn-thread (lambda () ,@fun) :linked ,linked))))
     (T 
      `(let ((,g!target ,target))
 	(if (node-info-p ,g!target)
-	    (%spawn-remote ,g!target ',fun)
+	    (%spawn-remote ,g!target '(lambda () ,@fun))
 	    (error "unknown target specifier ~A" ,g!target))))))
 
 ;; TODO: needs WHO was killed!, see :killed message
-(defun send-exit (pid)
-  (awhen (find-process pid)
-    (etypecase it
-      (thread-process-info (destroy-thread (thread-process-info-thread it))))))
+(defun send-exit (pid from)
+  (if (pid-node pid)
+      (awhen (find-process pid)
+	(etypecase it
+	  (thread-process-info)))
+      (%send pid :EXIT)))
 
 (defun link (pid)
   "Links foreign process death to current process."
   (with-processes (%link pid)))
 
 (defmacro send (pid message-constructor))
+
+
+
+(defun node-thread (&aux done)
+  (handler-case
+      (loop until done
+	 do (destructuring-bind (message . from) (%receive)
+	      (cond 
+		((atom (logv message))
+		 (case message
+		   ;; only local processes may terminate this thread
+		   (:QUIT (unless (pid-node from)
+			    (setq done T)))
+		   ;; only remote nodes can be disconnected
+		   (:DISCONNECT (awhen (pid-node from)
+				  (quit-node it)))))
+		((listp message)
+		 (case (car message)
+		   (:SPAWN (destructuring-bind (op num fun) message
+			     (spawn (:local)
+			       (%send from `(:SPAWNED ,num))
+			       (funcall (eval fun))))))))))
+    (abort-thread-condition () (setq done T))
+    (error (e)
+      (logv e)
+      (setq done T))))
+
+(defun init-environment (&optional (timeout 3))
+  (flet ((root-alivep ()
+	   (with-processes (find-process #1=root-pid))))
+    (with-processes (register-current-thread))
+    (when (root-alivep)
+      (quit-root))
+    (when (root-alivep)
+      (sleep timeout)
+      (quit-root))
+    ;; tried two times, if it isn't terminated by then, manual
+    ;; intervention is needed
+    (if (root-alivep)
+	(warn "root process wasn't restarted")
+	(%spawn-thread #'node-thread :pid #1# :name "DISTLISP-ROOT"))))
