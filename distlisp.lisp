@@ -16,7 +16,7 @@
 ;; (defun make-counter (limit &optional (lower 0) (initial (1- limit)))
 ;;   (when (>= lower limit)
 ;;     (error "LIMIT has to be bigger than LOWER (~D >= ~D" lower limit))
-;;   (lambda () (if (= initial (1- limit)) (setq initial lower) (incf initial))))
+;;   (lambda () (if (= initial (1- limit)) (setf initial lower) (incf initial))))
 
 ;; (defun counter-next (counter)
 ;;   (funcall counter))
@@ -137,20 +137,31 @@
 			 (push process-info *processes*)
 			 (condition-notify sync))
 		       (unwind-protect
-			    (block NIL
-			      (let ((*current-process* process-info)
-				    (*current-pid* pid))
-				(handler-case (funcall fun)
-				  (abort-thread-condition ()
-				    (return)))))
+			    (let ((*current-process* process-info)
+				  (*current-pid* pid))
+			      (funcall fun))
 			 (with-processes
 			   (setf *processes* (delete process-info *processes*))
-			   (mapcar #'send-exit (process-info-linked-set process-info))
+			   (mapcar (lambda (pid)
+				     (send-exit pid process-info))
+				   (process-info-linked-set process-info))
 			   )))
 		     :name name
 		     :initial-bindings default-distlisp-bindings)
 	(condition-wait sync *processes-lock*))
       pid)))
+
+(defun quit-process (process)
+  (etypecase process
+    (thread-process-info (destroy-thread (thread-process-info-thread process)))))
+
+(defun exit ()
+  "Exits the current thread, running the usual cleanup forms."
+  (quit-process *current-process*))
+
+(defun quit-node (node)
+  ;; the node is removed inside the reader thread
+  (destroy-thread (socket-node-info-thread node)))
 
 ;; (defun %interrupt-thread (pid &optional (fun (lambda () (error "interrupted"))))
 ;;   (interrupt-thread (thread-process-info-thread (find-process pid)) fun))
@@ -201,7 +212,8 @@
 (defstruct node-info
   "Identifies a node and its encoding."
   name
-  encoding)
+  encoding
+  linked-set)
 
 (defstruct (socket-node-info (:include node-info))
   "Specifies a node connected via a socket."
@@ -273,35 +285,32 @@
   (check-type node node-info)
   (route-remote (make-root-pid node) from message))
 
-(define-condition abort-thread-condition (condition)
-  ())
-
 (defun %wrap-remote (to message from)
   "PIDTO PIDFROM <MESSAGE>"
   `(,(pid-id to) ,(pid-id from) ,message))
 
-(defun reader-thread (node encoding stream &aux done)
+(defun reader-thread (node encoding stream &aux error)
   "Reads data from a STREAM using ENCODING."
   (unwind-protect
        (handler-case
-	   (loop until done
-	      do (destructuring-bind (pidto pidfrom message) (decode encoding stream)
+	   (loop (destructuring-bind (pidto pidfrom message) (decode encoding stream)
 		   (let ((to (make-pid :id pidto))
 			 (from (make-pid :id pidfrom :node node)))
 		     (unless (route-local to from message)
 		       ;; send error message back
 		       (route-remote from root-pid `(:NOPROCESS ,pidto))))))
-	 (abort-thread-condition () (setq done T)))
+	 ;; if we get an error, save it, so linked process can examine it
+	 (error (e)
+	   (setf error e)
+	   (error e)))
     (with-nodes 
       (remove-node node)
-      (close stream))))
-
-(defun abort-thread (thread)
-  (interrupt-thread thread (lambda () (signal 'abort-thread-condition))))
-
-(defun quit-node (node)
-  ;; the node is removed inside the reader thread
-  (abort-thread (socket-node-info-thread node)))
+      (close stream))
+    (let ((remote-root (make-root-pid node)))
+      (dolist (pid (node-info-linked-set node))
+	(route-local pid remote-root (if error
+					 `(:ERROR ,error)
+					 :DISCONNECTED))))))
 
 (defun make-connect-thread (socket name encoding &optional (stream socket))
   (let ((node (make-socket-node-info :encoding encoding :socket socket :stream stream)))
@@ -356,20 +365,14 @@
 
 ;; TODO: pre-protocol for establishing a connection, like, configuring the encoding
 (defun accept-thread (port encoding &aux done)
-  (handler-case
-      (let ((base (make-instance 'iomux:event-base)))
-	(unwind-protect
-	     (let ((plain-socket (make-server-socket port)))
-	       (add-server-handler base plain-socket encoding)
-	       (with-open-stream (socket plain-socket)
-		 (loop until done
-		    do (iomux:event-dispatch base))))
-	  (close base)))
-    (abort-thread-condition () (setq done T))))
-
-(defun quit-process (process)
-  (etypecase process
-    (thread-process-info (abort-thread (thread-process-info-thread process)))))
+  (let ((base (make-instance 'iomux:event-base)))
+    (unwind-protect
+	 (let ((plain-socket (make-server-socket port)))
+	   (add-server-handler base plain-socket encoding)
+	   (with-open-stream (socket plain-socket)
+	     (loop until done
+		do (iomux:event-dispatch base))))
+      (close base))))
 
 ;; TODO: register started server threads somewhere
 (defun start-server (&optional (port 2000) (encoding :sexp))
@@ -468,11 +471,14 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
 
 ;; TODO: needs WHO was killed!, see :killed message
 (defun send-exit (pid from)
-  (if (pid-node pid)
-      (awhen (find-process pid)
-	(etypecase it
-	  (thread-process-info)))
-      (%send pid :EXIT)))
+  (aif (pid-node pid)
+       ;; if it's a remote process, send a message to the corresponding
+       ;; root process
+       (%send (make-root-pid it) `(:EXIT ,(pid-id it)) from)
+       (awhen (find-process pid)
+	 (if (process-info-traps-exit it)
+	     (%send pid :EXIT from)
+	     (quit-process it)))))
 
 (defun link (pid)
   "Links foreign process death to current process."
@@ -491,20 +497,21 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
 		 (case message
 		   ;; only local processes may terminate this thread
 		   (:QUIT (unless (pid-node from)
-			    (setq done T)))
+			    (setf done T)))
 		   ;; only remote nodes can be disconnected
 		   (:DISCONNECT (awhen (pid-node from)
 				  (quit-node it)))))
 		((listp message)
 		 (case (car message)
+		   (:EXIT (destructuring-bind (op id) message
+			    (send-exit (make-pid :id id) from)))
 		   (:SPAWN (destructuring-bind (op num fun) message
 			     (spawn (:local)
 			       (%send from `(:SPAWNED ,num))
 			       (funcall (eval fun))))))))))
-    (abort-thread-condition () (setq done T))
     (error (e)
       (logv e)
-      (setq done T))))
+      (setf done T))))
 
 (defun init-environment (&optional (timeout 3))
   (flet ((root-alivep ()
@@ -512,11 +519,13 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
     (with-processes (register-current-thread))
     (when (root-alivep)
       (quit-root))
+    (sleep 0.1)
     (when (root-alivep)
       (sleep timeout)
       (quit-root))
     ;; tried two times, if it isn't terminated by then, manual
     ;; intervention is needed
+    (sleep 0.1)
     (if (root-alivep)
 	(warn "root process wasn't restarted")
 	(%spawn-thread #'node-thread :pid #1# :name "DISTLISP-ROOT"))))
