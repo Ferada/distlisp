@@ -122,6 +122,33 @@
   "Returns a generalized boolean whether PID is still valid to our knowledge."
   (member pid *processes* :key #'process-info-pid :test #'equalp))
 
+(defconstant root-pid (make-pid :id 0)
+  "Specifies the local node process PID.")
+
+(defun make-root-pid (node)
+  (make-pid :id 0 :node node))
+
+(defun quit-process (process)
+  (etypecase process
+    (thread-process-info (destroy-thread (thread-process-info-thread process)))))
+
+;; TODO: needs WHO was killed!, see :killed message
+(defun send-exit (pid from &optional reason)
+  (aif (pid-node pid)
+       ;; if it's a remote process, send a message to the corresponding
+       ;; root process
+       (%send (make-root-pid it) `(:EXIT ,(pid-id it) ,reason) from)
+       (awhen (with-processes (find-process pid))
+	 (if (or (process-info-traps-exit it)
+		 (null reason))
+	     (%send pid `(:EXIT ,reason) from)
+	     (quit-process it)))))
+
+(defun map-exit (pids from &optional reason)
+  (mapcar (lambda (pid) (send-exit pid from reason))
+	  ;; copy list to prevent recursive locking
+	  (with-processes (with-nodes (copy-list pids)))))
+
 (let ((sync (make-condition-variable))
       (counter 0))
   (defun %spawn-thread (fun &key linked (pid (make-pid))
@@ -133,27 +160,26 @@
 		       (with-processes
 			 (setf (thread-process-info-thread process-info) (current-thread))
 			 (when linked
-			   (push pid (process-info-linked-set process-info)))
+			   (push *current-pid* (process-info-linked-set process-info)))
 			 (push process-info *processes*)
 			 (condition-notify sync))
 		       (unwind-protect
 			    (let ((*current-process* process-info)
 				  (*current-pid* pid))
-			      (funcall fun))
+			      (handler-case
+				  (progn
+				    (funcall fun)
+				    (map-exit (process-info-linked-set *current-process*)
+					      *current-pid*))
+				(error (err)
+				  (map-exit (process-info-linked-set *current-process*)
+					    *current-pid* err))))
 			 (with-processes
-			   (setf *processes* (delete process-info *processes*))
-			   (mapcar (lambda (pid)
-				     (send-exit pid process-info))
-				   (process-info-linked-set process-info))
-			   )))
+			   (setf *processes* (delete process-info *processes*)))))
 		     :name name
 		     :initial-bindings default-distlisp-bindings)
 	(condition-wait sync *processes-lock*))
       pid)))
-
-(defun quit-process (process)
-  (etypecase process
-    (thread-process-info (destroy-thread (thread-process-info-thread process)))))
 
 (defun exit ()
   "Exits the current thread, running the usual cleanup forms."
@@ -169,7 +195,8 @@
 (defun %link (pid &optional (process *current-process*))
   (awhen (find-process pid)
     (etypecase it
-      (thread-process-info (push (process-info-pid process) (process-info-linked-set it))))))
+      (thread-process-info (push (process-info-pid process)
+				 (process-info-linked-set it))))))
 
 ;;; method primitives
 
@@ -226,12 +253,6 @@
   thread
   )
 
-(defconstant root-pid (make-pid :id 0)
-  "Specifies the local node process PID.")
-
-(defun make-root-pid (node)
-  (make-pid :id 0 :node node))
-
 (defun add-node (node)
   (push node *nodes*))
 
@@ -259,16 +280,17 @@
   (check-type from pid)
   (let* ((node (pid-node to))
 	 (encoding (node-info-encoding node)))
-    (if (with-nodes (valid-node? node))
+    (if (valid-node? node)
 	(progn (%write-node node (%wrap-remote to message from) encoding)
 	       T)
-	(warn "remote process ~A on node ~A not valid, discarded"
-	      (pid-id to) node))))
+	(progn (warn "remote process ~A on node ~A not valid, discarded"
+		     (pid-id to) node)
+	       NIL))))
 
 (defun route-local (to from message)
   (check-type to pid)
   (check-type from pid)
-  (aif (with-processes (find-process to))
+  (aif (find-process to)
        (progn (enqueue (mailbox-indeque (process-info-mailbox it))
 		       (%wrap-local message from))
 	      T)
@@ -278,13 +300,13 @@
   "Queues a message for asynchronously sending it to another process."
   (check-type to pid)
   (if (pid-node to)
-      (route-remote to from message)
-      (route-local to from message)))
+      (with-processes (with-nodes (route-remote to from message)))
+      (with-processes (route-local to from message))))
 
 (defun %send-node (node message &optional (from *current-pid*))
   "Queues a message for asynchronously sending it to the handler process at NODE."
   (check-type node node-info)
-  (route-remote (make-root-pid node) from message))
+  (with-processes (with-nodes (route-remote (make-root-pid node) from message))))
 
 (defun %wrap-remote (to message from)
   "PIDTO PIDFROM <MESSAGE>"
@@ -297,21 +319,22 @@
 	   (loop (destructuring-bind (pidto pidfrom message) (decode encoding stream)
 		   (let ((to (make-pid :id pidto))
 			 (from (make-pid :id pidfrom :node node)))
-		     (unless (route-local to from message)
+		     (unless (with-processes (route-local to from message))
 		       ;; send error message back
-		       (route-remote from root-pid `(:NOPROCESS ,pidto))))))
+		       (with-processes
+			 (with-nodes
+			   (route-remote from root-pid `(:NOPROCESS ,pidto))))))))
 	 ;; if we get an error, save it, so linked process can examine it
 	 (error (e)
 	   (setf error e)
+	   ;; resignal to bring up the debugger
 	   (error e)))
-    (with-nodes 
-      (remove-node node)
-      (close stream))
-    (let ((remote-root (make-root-pid node)))
-      (dolist (pid (node-info-linked-set node))
-	(route-local pid remote-root (if error
-					 `(:ERROR ,error)
-					 :DISCONNECTED))))))
+    (with-processes
+      (with-nodes 
+	(remove-node node)
+	(close stream))
+      (map-exit (node-info-linked-set node) (make-root-pid node)
+		(if error error :DISCONNECTED)))))
 
 (defun make-connect-thread (socket name encoding &optional (stream socket))
   (let ((node (make-socket-node-info :encoding encoding :socket socket :stream stream)))
@@ -421,7 +444,9 @@ for the node."
 		  :test #'eq)
     (let* ((pid (make-pid))
 	   (info (make-thread-process-info :pid pid
-					   :thread (current-thread))))
+					   :thread (current-thread)
+					   ;; you wouldn't like it to be different
+					   :traps-exit T)))
       (setf *current-process* info
 	    *current-pid* pid)
       (push info *processes*))))
@@ -434,17 +459,19 @@ for the node."
   (flet ((kill-nodes ()
 	   (with-nodes (mapcar #'quit-node *nodes*)))
 	 (kill-processes ()
-	   (with-processes (mapcar #'quit-process *processes*))))
-    (quit-root)
-    (kill-nodes)
-    (kill-processes)
-    (when (or #1=(with-processes *processes*) #2=(with-nodes *nodes*))
-      (sleep timeout)
+	   (mapcar #'quit-process *processes*)))
+    (with-processes
+      (quit-root)
       (kill-nodes)
       (kill-processes))
-    (when #1#
+    (when (with-processes (or *processes* (with-nodes *nodes*)))
+      (sleep timeout)
+      (with-processes
+	(kill-nodes)
+	(kill-processes)))
+    (when (with-processes *processes*)
       (warn "some processes still alive"))
-    (when #2#
+    (when (with-processes (with-nodes *nodes*))
       (warn "some nodes still connected"))))
 
 ;;;; macros and convenience functions based on the previous APIs
@@ -476,17 +503,6 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
 	    (%spawn-remote ,g!target '(lambda () ,@fun))
 	    (error "unknown target specifier ~A" ,g!target))))))
 
-;; TODO: needs WHO was killed!, see :killed message
-(defun send-exit (pid from)
-  (aif (pid-node pid)
-       ;; if it's a remote process, send a message to the corresponding
-       ;; root process
-       (%send (make-root-pid it) `(:EXIT ,(pid-id it)) from)
-       (awhen (find-process pid)
-	 (if (process-info-traps-exit it)
-	     (%send pid :EXIT from)
-	     (quit-process it)))))
-
 (defun link (pid)
   "Links foreign process death to current process."
   (with-processes (%link pid)))
@@ -496,34 +512,35 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
 
 
 (defun node-thread (&aux done)
-  (handler-case
-      (loop until done
-	 do (destructuring-bind (message . from) (%receive)
-	      (cond 
-		((atom (logv message))
-		 (case message
-		   ;; only local processes may terminate this thread
-		   (:QUIT (unless (pid-node from)
-			    (setf done T)))
-		   ;; only remote nodes can be disconnected
-		   (:DISCONNECT (awhen (pid-node from)
-				  (quit-node it)))))
-		((listp message)
-		 (case (car message)
-		   (:EXIT (destructuring-bind (op id) message
-			    (send-exit (make-pid :id id) from)))
-		   (:SPAWN (destructuring-bind (op num fun) message
-			     (spawn (:local)
-			       (%send from `(:SPAWNED ,num))
-			       (funcall (eval fun))))))))))
-    (error (e)
-      (logv e)
-      (setf done T))))
+  (loop
+     (destructuring-bind (message . from) (%receive)
+       (cond 
+	 ((atom message)
+	  (case message
+	    ;; only local processes may terminate this thread
+	    (:QUIT (unless (pid-node from)
+		     (setf done T)))
+	    ;; only remote nodes can be disconnected
+	    (:DISCONNECT (awhen (pid-node from)
+			   (quit-node it)))
+	    (T (logv 'unknown-message message))))
+	 ((listp message)
+	  (case (car message)
+	    (:EXIT (destructuring-bind (op id reason) message
+		     (send-exit (make-pid :id id) from reason)))
+	    (:SPAWN (destructuring-bind (op num fun) message
+		      (spawn (:local)
+			(%send from `(:SPAWNED ,num))
+			(funcall (eval fun)))))
+	    (T (logv 'unknown-message message))))
+	 (T (logv 'unknown-message message))))))
 
-(defun init-environment (&optional (timeout 3))
+(defun init-environment (&optional (start-root T) (timeout 3))
   (flet ((root-alivep ()
 	   (with-processes (find-process #1=root-pid))))
     (with-processes (register-current-thread))
+    (unless start-root
+      (return-from init-environment))
     (when (root-alivep)
       (quit-root))
     (sleep 0.1)
