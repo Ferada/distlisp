@@ -151,14 +151,15 @@
 
 (let ((sync (make-condition-variable))
       (counter 0))
-  (defun %spawn-thread (fun &key linked (pid (make-pid))
+  (defun %spawn-thread (fun &key (pid (make-pid)) linked traps-exit
 			(name (format NIL "DISTLISP-SPAWNED-~D" (incf counter))))
     "Spawns a new local process (using a thread).  Returns when the process is initialised."
     (let ((process-info (make-thread-process-info :pid pid)))
       (with-processes
 	(make-thread (lambda ()
 		       (with-processes
-			 (setf (thread-process-info-thread process-info) (current-thread))
+			 (setf (thread-process-info-thread process-info) (current-thread)
+			       (process-info-traps-exit process-info) traps-exit)
 			 (when linked
 			   (push *current-pid* (process-info-linked-set process-info)))
 			 (push process-info *processes*)
@@ -477,14 +478,14 @@ for the node."
 ;;;; macros and convenience functions based on the previous APIs
 
 (let ((counter (make-pid-counter)))
-  (defun %spawn-remote (node fun &optional linked)
+  (defun %spawn-remote (node fun &optional linked traps-exit)
     (let ((num (counter-next counter)))
-      (%send (make-root-pid node) `(:SPAWN ,num ,linked ,fun))
+      (%send (make-root-pid node) `(:SPAWN ,num ,linked ,traps-exit ,fun))
       (cdr (%receive-match (lambda (message from)
 			     (and (eq (car message) :SPAWNED)
 				  (= (cadr message) num))))))))
 
-(defmacro! spawn ((target &optional linked) &body fun)
+(defmacro! spawn ((target &key linked traps-exit) &body fun)
   "Spawns lambda form FUN at TARGET.
 
 TARGET can be of type (OR NULL KEYWORD NODE-INFO).
@@ -496,11 +497,13 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
     ;;  `(%spawn-thread (lambda () ,@fun) :linked ,linked))
     ((keywordp target)
      (ematch target
-       (:local `(%spawn-thread (lambda () ,@fun) :linked ,linked))))
+       (:local `(%spawn-thread (lambda () ,@fun)
+			       :linked ,linked
+			       :traps-exit ,traps-exit))))
     (T 
      `(let ((,g!target ,target))
 	(if (node-info-p ,g!target)
-	    (%spawn-remote ,g!target '(lambda () ,@fun))
+	    (%spawn-remote ,g!target ,linked ,traps-exit '(lambda () ,@fun))
 	    (error "unknown target specifier ~A" ,g!target))))))
 
 (defun link (pid)
@@ -528,8 +531,9 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
 	  (case (car message)
 	    (:EXIT (destructuring-bind (op id reason) message
 		     (send-exit (make-pid :id id) from reason)))
-	    (:SPAWN (destructuring-bind (op num fun) message
-		      (spawn (:local)
+	    (:SPAWN (destructuring-bind (op num linked traps-exit fun) message
+		      (spawn (:local :linked linked
+				     :traps-exit traps-exit)
 			(%send from `(:SPAWNED ,num))
 			(funcall (eval fun)))))
 	    (T (logv 'unknown-message message))))
@@ -552,4 +556,7 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
     (sleep 0.1)
     (if (root-alivep)
 	(warn "root process wasn't restarted")
-	(%spawn-thread #'node-thread :pid #1# :name "DISTLISP-ROOT"))))
+	(%spawn-thread #'node-thread
+		       :pid #1#
+		       :name "DISTLISP-ROOT"
+		       :traps-exit T))))
