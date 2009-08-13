@@ -113,14 +113,19 @@
       "Identifies a process relative to the local node."
       (id (counter-next pid-counter))
       node)))
+
+(defun pid-eq (p q)
+  "Returns T if P and Q specify the same process, else NIL."
+  (and (= (pid-id p) (pid-id q))
+       (eq (pid-node p) (pid-node q))))
 
 (defun find-process (pid)
   "Searches *PROCESSES* by PID."
-  (find pid *processes* :key #'process-info-pid :test #'equalp))
+  (find pid *processes* :key #'process-info-pid :test #'pid-eq))
 
 (defun valid-local-pid? (pid)
   "Returns a generalized boolean whether PID is still valid to our knowledge."
-  (member pid *processes* :key #'process-info-pid :test #'equalp))
+  (member pid *processes* :key #'process-info-pid :test #'pid-eq))
 
 (defconstant root-pid (make-pid :id 0)
   "Specifies the local node process PID.")
@@ -157,24 +162,25 @@
     (let ((process-info (make-thread-process-info :pid pid)))
       (with-processes
 	(make-thread (lambda ()
-		       (with-processes
-			 (setf (thread-process-info-thread process-info) (current-thread)
-			       (process-info-traps-exit process-info) traps-exit)
-			 (when linked
-			   (push *current-pid* (process-info-linked-set process-info)))
-			 (push process-info *processes*)
-			 (condition-notify sync))
 		       (unwind-protect
-			    (let ((*current-process* process-info)
-				  (*current-pid* pid))
-			      (handler-case
-				  (progn
-				    (funcall fun)
+			    (progn
+			      (with-processes
+				(setf (thread-process-info-thread process-info) (current-thread)
+				      (process-info-traps-exit process-info) traps-exit)
+				(when linked
+				  (push *current-pid* (process-info-linked-set process-info)))
+				(push process-info *processes*)
+				(condition-notify sync))
+			      (let ((*current-process* process-info)
+				    (*current-pid* pid))
+				(handler-case
+				    (progn
+				      (funcall fun)
+				      (map-exit (process-info-linked-set *current-process*)
+						*current-pid*))
+				  (error (err)
 				    (map-exit (process-info-linked-set *current-process*)
-					      *current-pid*))
-				(error (err)
-				  (map-exit (process-info-linked-set *current-process*)
-					    *current-pid* err))))
+					      *current-pid* err)))))
 			 (with-processes
 			   (setf *processes* (delete process-info *processes*)))))
 		     :name name
@@ -477,13 +483,12 @@ for the node."
 
 ;;;; macros and convenience functions based on the previous APIs
 
-(let ((counter (make-pid-counter)))
-  (defun %spawn-remote (node fun &optional linked traps-exit)
-    (let ((num (counter-next counter)))
-      (%send (make-root-pid node) `(:SPAWN ,num ,linked ,traps-exit ,fun))
-      (cdr (%receive-match (lambda (message from)
-			     (and (eq (car message) :SPAWNED)
-				  (= (cadr message) num))))))))
+(defun %spawn-remote (node fun &optional linked traps-exit)
+  (let ((pid (make-root-pid node)))
+    (%send pid `(:SPAWN ,linked ,traps-exit ,fun))
+    (cdr (%receive-match (lambda (message from)
+			   (and (eq (car message) :SPAWNED)
+				(pid-eq pid from)))))))
 
 (defmacro! spawn ((target &key linked traps-exit) &body fun)
   "Spawns lambda form FUN at TARGET.
@@ -514,27 +519,68 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
 
 
 
+
+(defvar *services* NIL
+  "A list of externally visible, registered processes.")
+
+(defvar *services-lock* (make-lock)
+  "The lock for *SERVICES*.")
+
+(defmacro with-services (&body body)
+  "Executes BODY with *SERVICES-LOCK* held."
+  `(with-lock-held (*services-lock*)
+     ,@body))
+
+(defun register-service (name &optional (pid *current-pid*))
+  (with-services
+    (push `(,name . ,pid) *services*)))
+
+(defun unregister-service (&optional (pid *current-pid*))
+  (with-services
+    (setf *services* (delete pid *services* :key #'cdr :test #'pid-eq))))
+
+(defmacro with-registered-service (name &body body)
+  `(unwind-protect
+	(progn
+	  (register-service ',name)
+	  ,@body)
+     (unregister-service)))
+
+(defun services-names ()
+  (with-services
+    (mapcar #'car *services*)))
+
+(defun list-services (node)
+  (let ((pid (make-root-pid node)))
+    (%send pid :LIST-SERVICES)
+    (car (%receive-match (lambda (message from)
+			   (and (eq (car message) :SERVICES)
+				(pid-eq from pid)))))))
+
 (defun node-thread (&aux done)
   (loop
      (destructuring-bind (message . from) (%receive)
-       (cond 
+       (cond
 	 ((atom message)
 	  (case message
 	    ;; only local processes may terminate this thread
 	    (:QUIT (unless (pid-node from)
-		     (setf done T)))
+		     (return)))
 	    ;; only remote nodes can be disconnected
 	    (:DISCONNECT (awhen (pid-node from)
 			   (quit-node it)))
+	    (:LIST-SERVICES (%send from `(:SERVICES ,(services-names))))
 	    (T (logv 'unknown-message message))))
 	 ((listp message)
 	  (case (car message)
 	    (:EXIT (destructuring-bind (op id reason) message
+		     (declare (ignore op))
 		     (send-exit (make-pid :id id) from reason)))
-	    (:SPAWN (destructuring-bind (op num linked traps-exit fun) message
+	    (:SPAWN (destructuring-bind (op linked traps-exit fun) message
+		      (declare (ignore op))
 		      (spawn (:local :linked linked
 				     :traps-exit traps-exit)
-			(%send from `(:SPAWNED ,num))
+			(%send from :SPAWNED)
 			(funcall (eval fun)))))
 	    (T (logv 'unknown-message message))))
 	 (T (logv 'unknown-message message))))))
