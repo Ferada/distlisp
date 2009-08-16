@@ -14,4 +14,21 @@
 	       #:anaphora
 	       #:cl-store
 	       #:trivial-timeout)
-  :components ((:file "distlisp")))
+  :serial T
+  :components ((:file "package")
+	       (:file "defaults")
+	       (:file "globals")
+	       (:file "methods")
+	       (:file "utils")
+	       (:file "encode")
+	       (:file "process")
+	       (:file "receive")
+	       (:file "node")
+	       (:file "send")
+	       (:file "remote")
+	       (:file "spawn")
+	       (:file "server")
+	       (:file "environment")
+	       (:file "services")
+	       ;; (:file "test")
+	       ))
