@@ -14,11 +14,11 @@
 (defconstant pid-counter (make-pid-counter))
 
 (defclass process-info ()
-  ((pid :reader process-info-pid)
-   (mailbox :initform (make-mailbox) :reader process-info-mailbox)
-   linked-set
-   monitored-set
-   traps-exit
+  ((pid :initarg :pid :reader process-info-pid)
+   (mailbox :initform (make-mailbox))
+   (linked-set :initform NIL)
+   (monitored-set :initform NIL)
+   (traps-exit :initarg :traps-exit)
    (lock :initform (make-lock "process-lock")))
   (:documentation "Has information about a local process."))
 
@@ -28,7 +28,7 @@
        ,.body)))
 
 (defclass thread-process-info (process-info)
-  (thread)
+  ((thread :initarg :thread))
   (:documentation "Additional information for a process based on a thread."))
 
 ;;; helper functions
@@ -53,7 +53,9 @@
 
 (defun pid-counter-next (counter)
   (loop as result = (counter-next counter)
-     while (find-process result)
+     while (find result *processes*
+		 :key (lambda (process) (pid-id (slot-value process 'pid)))
+		 :test #'=)
      finally (return result)))
 
 ;;; helper functions for process-info
@@ -69,6 +71,18 @@
 (defun link-processes (process-1 pid-1 process-2 pid-2)
   (add-to-linked-set process-1 pid-2)
   (add-to-linked-set process-2 pid-1))
+
+(defun unlink-processes (process-1 pid-1 process-2 pid-2)
+  (remove-from-linked-set process-1 pid-2)
+  (remove-from-linked-set process-2 pid-1))
+
+(defun add-to-monitored-set (process pid)
+  (with-slots ((set monitored-set)) process
+    (pushnew pid set :test #'pid-eq)))
+
+(defun remove-from-monitored-set (process pid)
+  (with-slots ((set monitored-set)) process
+    (setf set (delete pid set :test #'pid-eq))))
 
 (defun exit (&optional (reason :NORMAL))
   "Exits the current process, running the usual cleanup forms."

@@ -23,7 +23,6 @@
 (defgeneric exit-process (process &optional reason)
   (:documentation
    "Exits the current PROCESS, running the usual cleanup forms."))
-
 
 ;;; see node.lisp
 

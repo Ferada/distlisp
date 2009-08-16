@@ -5,7 +5,7 @@
 (defvar *processes* NIL
   "List of running processes.")
 
-(defvar *processes-lock* (make-lock)
+(defvar *processes-lock* (make-lock "processes-lock")
   "Global lock for processes.")
 
 (defmacro with-processes (&body body)
@@ -16,7 +16,7 @@
 (defvar *nodes* NIL
   "List of connected nodes.")
 
-(defvar *nodes-lock* (make-lock)
+(defvar *nodes-lock* (make-lock "nodes-lock")
   "Global lock for nodes.")
 
 (defmacro with-nodes (&body body)
@@ -35,7 +35,7 @@
 (defvar *services* NIL
   "A list of externally visible, registered processes.")
 
-(defvar *services-lock* (make-lock)
+(defvar *services-lock* (make-lock "services-lock")
   "The lock for *SERVICES*.")
 
 (defmacro with-services (&body body)

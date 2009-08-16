@@ -26,18 +26,27 @@
 	  ;; only remote nodes can be disconnected
 	  (:DISCONNECT (awhen (pid-node from)
 			 (kill-node it)))
-	  (:LIST-SERVICES (with-services (%send from `(:SERVICES ,*services*))))
+	  (:LIST-SERVICES (with-services
+			    (apply #'send-list from *current-pid* :SERVICES *services*)))
 	  (T (logv 'unknown-message message)))
 	(case (car message)
 	  (:EXIT (destructuring-bind (op id reason) message
 		   (declare (ignore op))
-		   (send-exit (make-pid :id id) from reason)))
-	  (:SPAWN (destructuring-bind (op linked traps-exit fun) message
+		   (send-exit (make-pid :id id) reason from)))
+	  ;; TODO: implement this (in a generic way, if possible)
+	  (:LINK)
+	  (:UNLINK)
+	  (:TRAP-EXIT)
+	  (:SPAWN (destructuring-bind (op linked monitored traps-exit fun)
+		      message
 		    (declare (ignore op))
 		    (spawn (:local :traps-exit traps-exit)
-		      (when linked
-			(with-process-lock *current-process*
-			  (add-to-linked-set *current-process* from)))
+		      (with-process-lock *current-process*
+			(when linked
+			  (add-to-linked-set *current-process* from))
+			(when (or (eq monitored :FROM)
+				  (eq monitored :BOTH))
+			  (add-to-monitored-set *current-process* from)))
 		      (%send from :SPAWNED)
 		      (funcall (eval fun)))))
 	  (T (logv 'unknown-message message))))))
@@ -46,14 +55,14 @@
   "Reads data from a STREAM using ENCODING."
   (unwind-protect
        (handler-case
-	   (loop (destructuring-bind (pidto pidfrom message) (decode encoding stream)
+	   (loop (destructuring-bind (pidto pidfrom message)
+		     (decode encoding stream)
 		   (let ((to (make-pid :id pidto))
 			 (from (make-pid :id pidfrom :node node)))
 		     (unless (with-processes (route-local to from message))
 		       ;; send error message back
-		       (with-processes
-			 (with-nodes
-			   (route-remote from root-pid `(:NOPROCESS ,pidto))))))))
+		       (with-nodes
+			 (route-remote from root-pid `(:NOPROCESS ,pidto)))))))
 	 ;; if we get an error, save it, so linked process can examine it
 	 (error (e)
 	   (setf error e)))

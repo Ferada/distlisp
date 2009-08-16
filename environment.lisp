@@ -18,7 +18,7 @@
 	      *current-pid* pid)
 	(add-process info)))))
 
-(defun stop-environment (&optional (timeout 3))
+(defun stop-environment (&optional (timeout default-timeout))
   (flet ((kill-nodes ()
 	   (with-nodes (mapcar #'kill-node *nodes*)))
 	 (kill-processes ()
@@ -38,7 +38,7 @@
     (when (with-processes (with-nodes *nodes*))
       (warn "some nodes still connected"))))
 
-(defun init-environment (&optional (start-root T) (timeout 3))
+(defun init-environment (&optional (start-root T) (timeout default-timeout))
   (with-processes (register-current-thread))
   (unless start-root
     (return-from init-environment))

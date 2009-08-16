@@ -3,7 +3,7 @@
 (in-package #:distlisp)
 
 (defun current-indeque ()
-  (mailbox-indeque (process-info-mailbox *current-process*)))
+  (mailbox-indeque (slot-value *current-process* 'mailbox)))
 
 ;;; receiving messages variants
 

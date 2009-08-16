@@ -10,11 +10,6 @@
     (let ((process-info (make-instance 'thread-process-info :pid pid :traps-exit traps-exit))
 	  (exit :NORMAL)
 	  notified)
-      ;; TODO: do this right
-      (ecase monitored
-	(:to)
-	(:fro)
-	(:both))
       (with-slots (thread linked-set monitored-set) process-info
 	(let ((thread-fun (lambda ()
 			    (unwind-protect
@@ -29,9 +24,17 @@
 					   (link-processes process-info
 							   pid
 							   *current-process*
-							   *current-pid*)
-					   (add-process process-info)))
+							   *current-pid*))
+					 ;; TODO: do this right
+					 (when (or (eq monitored :FROM)
+						   (eq monitored :BOTH))
+					   (add-to-monitored-set process-info pid)))
+				       (with-process-lock *current-process*
+					 (when (or (eq monitored :TO)
+						   (eq monitored :BOTH))
+					   (add-to-monitored-set *current-process* pid)))
 				       (with-processes
+					 (add-process process-info)
 					 (setf notified T)
 					 (condition-notify sync))
 				       (let ((*current-process* process-info)
@@ -46,8 +49,8 @@
 				(unless notified
 				  (condition-notify sync))
 				(remove-process process-info))
-			      (mapcar (lambda (pid)
-					(%send pid `(:KILLED ,exit) pid))
+			      (mapcar (lambda (to)
+					(send-list to pid :KILLED exit))
 				      (with-process-lock process-info
 					(copy-list monitored-set)))
 			      (map-exit pid
@@ -71,26 +74,33 @@
 		 (unless (thread-alive-p thread)
 		   (return))))))))))
 
-(defun spawn-remote (node fun &optional linked traps-exit)
+(defun spawn-remote (node fun &key linked monitored traps-exit)
   "Spawns FUN on NODE.  Returns if we receive a :SPAWNED message from the
 spawned process."
   (let ((pid (make-root-pid node)))
-    (%send pid `(:SPAWN ,linked ,traps-exit ,fun))
+    (send-list pid *current-pid* :SPAWN linked monitored traps-exit fun)
     (let ((remote (cdr (%receive-if (lambda (message from)
 				      (and (eq (car message) :SPAWNED)
 					   (pid-eq pid from)))))))
       (with-process-lock *current-process*
-	(add-to-linked-set *current-process* remote))
+	(when linked
+	  (add-to-linked-set *current-process* remote))
+	(when (or (eq monitored :TO)
+		  (eq monitored :BOTH))
+	  (add-to-monitored-set *current-process* pid)))
       remote)))
 
 ;;; derived macros
 
-(defmacro! spawn ((&optional (target :local) &key linked traps-exit) &body fun)
+(defmacro! spawn ((&optional (target :local) &key linked monitored traps-exit) &body fun)
   "Spawns lambda form FUN at TARGET.
 
 TARGET can be of type (OR KEYWORD NODE-INFO).
 
 If TARGET is a keyword, :LOCAL specifies thread spawning."
+  ;;(check-type linked boolean)
+  ;;(check-type traps-exit boolean)
+  ;;(check-type monitored (member :BOTH :FROM :TO NIL))
   (cond
     ;; this should become a load balancer or something strategy dependent (?!)
     ;; ((null target)
@@ -99,9 +109,13 @@ If TARGET is a keyword, :LOCAL specifies thread spawning."
      (ematch target
 	     (:local `(spawn-thread (lambda () ,@fun)
 				    :linked ,linked
+				    :monitored ,monitored
 				    :traps-exit ,traps-exit))))
     (T 
      `(let ((,g!target ,target))
 	(if (node-info-p ,g!target)
-	    (spawn-remote ,g!target ,linked ,traps-exit '(lambda () ,@fun))
+	    (spawn-remote ,g!target '(lambda () ,@fun)
+			  :linked ,linked
+			  :monitored ,monitored
+			  :traps-exit ,traps-exit)
 	    (error "unknown target specifier ~A" ,g!target))))))
