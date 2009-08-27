@@ -3,6 +3,11 @@
 (in-package #:distlisp)
 
 (defun register-current-thread ()
+  "Registers the current thread with the system (if not already registered).
+Only from there on you can use the functionality of the library.
+
+It is registered as a system process, trapping exits; the pid is
+generated as normally done."
   (with-processes
     (unless (member (current-thread) *processes*
 		    :key (lambda (process) (when (typep process 'thread-process-info)
@@ -19,6 +24,10 @@
 	(add-process info)))))
 
 (defun stop-environment (&optional (timeout default-timeout))
+  "Tries hard to stop the various processes (node process and everything
+else) gracefully.
+
+Consequently also disconnects all nodes."
   (flet ((kill-nodes ()
 	   (with-nodes (mapcar #'kill-node *nodes*)))
 	 (kill-processes ()
@@ -28,6 +37,7 @@
     (with-processes
       (kill-nodes)
       (kill-processes))
+    (sleep 0.1)
     (when (with-processes (or *processes* (with-nodes *nodes*)))
       (sleep timeout)
       (with-processes
@@ -39,6 +49,9 @@
       (warn "some nodes still connected"))))
 
 (defun init-environment (&optional (start-root T) (timeout default-timeout))
+  "Starts the library.
+
+If START-ROOT is set, the server code is also started."
   (register-current-thread)
   (unless start-root
     (return-from init-environment))
