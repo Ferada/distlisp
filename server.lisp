@@ -124,7 +124,7 @@
 		     :reuse-address T
 		     :local-host iolib:+ipv4-unspecified+
 		     :local-port port
-		     :external-format default-format))
+		     :external-format default-external-format))
 
 ;; TODO: pre-protocol for establishing a connection, like, configuring the encoding
 (defun accept-thread (port encoding &aux done)

@@ -1,22 +1,42 @@
 (in-package #:cl-user)
 
 (defpackage #:distlisp-tests
-  (:use #:cl #:logv #:utils-frahm #:anaphora #:distlisp #:fare-matcher)
+  (:use #:cl #:utils-frahm #:anaphora #:distlisp #:fare-matcher
+	#:it.bese.FiveAM)
   (:export #:run-tests))
 
 (in-package #:distlisp-tests)
 
-;;;; two demos for process death, exits and linking from
+(def-suite distlisp-suite)
+
+(def-suite erlang-suite
+    :description "Demo applications from Programming Erlang"
+    :in distlisp-suite)
+
+(in-suite erlang-suite)
+
+;;;; two demos for process death, exits and linking taken from
 ;;;; Programming Erlang, p. 157
+
+;;; for automatic tests, don't generate any output, but i leave it here
+;;; for comparison
+
+;; (defun wait (Prog)
+;;   (receive-loop (Any From)
+;;     (format T "process ~A received ~A from ~A~%" Prog Any From)))
+
+;; (defun status (Name Pid)
+;;   (if (distlisp::with-processes (distlisp::find-process Pid))
+;;       (prog1 T (format T "process ~A (~A) is alive~%" Name Pid))
+;;       (prog1 NIL (format T "process ~A (~A) is dead~%" Name Pid))))
 
 (defun wait (Prog)
   (receive-loop (Any From)
-    (format T "process ~A received ~A from ~A~%" Prog Any From)))
+    ;; do nothing
+    ))
 
 (defun status (Name Pid)
-  (if (distlisp::with-processes (distlisp::find-process Pid))
-      (prog1 T (format T "process ~A (~A) is alive~%" Name Pid))
-      (prog1 NIL (format T "process ~A (~A) is dead~%" Name Pid))))
+  (not (null (distlisp::with-processes (distlisp::find-process Pid)))))
 
 (defun a ()
   (wait 'a))
@@ -37,7 +57,7 @@
 	    (wait 'c))
 	  (normal T)))
 
-(defun run-demo2 (Bool M)
+(defun demo-1 (Bool M)
   (let* ((A (spawn (:local :traps-exit T) (a)))
 	 (B (spawn (:local :traps-exit Bool) (b A)))
 	 (C (spawn () (c B M))))
@@ -55,7 +75,7 @@
   (kill B M)
   (wait 'c))
 
-(defun run-demo2 (Bool M)
+(defun demo-2 (Bool M)
   (let* ((A (spawn (:local :traps-exit T) (a)))
 	 (B (spawn (:local :traps-exit Bool) (b A)))
 	 (C (spawn (:local :traps-exit T) (c2 B M))))
@@ -68,35 +88,32 @@
       (when sta (kill A))
       (list sta stb stc))))
 
-(defun run-tests (calls fun)
-  (dolist (call calls)
-    (let* ((result (apply fun (car call)))
-	   (successful (equalp result (cdr call))))
-      (unless successful
-	(format T "test ~A did not result in ~A but ~A, aborted~%"
-		(car call) (cdr call) result)
-	(return-from run-tests))))
-  (format T "all tests passed~%")
-  T)
+(defvar testcases-1
+  '(((T (die abc)) (T T NIL))
+    ((T (die :NORMAL)) (T T NIL))
+    ((T (die :KILL)) (T T NIL))
+    ((T (divide 0)) (T T NIL))
+    ((T NORMAL) (T T NIL))
+    ((NIL (die abc)) (T NIL NIL))
+    ((NIL (die :NORMAL)) (T T NIL))
+    ((NIL (die :KILL)) (T NIL NIL))
+    ((NIL (divide 0)) (T NIL NIL))
+    ((NIL NORMAL) (T T NIL))))
 
-(defun test-demo1 ()
-  (let ((calls `(((T (die abc)) . (T T NIL))
-		 ((T (die :NORMAL)) . (T T NIL))
-		 ((T (die :KILL)) . (T T NIL))
-		 ((T (divide 0)) . (T T NIL))
-		 ((T NORMAL) . (T T NIL))
-		 ((NIL (die abc)) . (T NIL NIL))
-		 ((NIL (die :NORMAL)) . (T T NIL))
-		 ((NIL (die :KILL)) . (T NIL NIL))
-		 ((NIL (divide 0)) . (T NIL NIL))
-		 ((NIL NORMAL) . (T T NIL)))))
-    (run-tests calls #'run-demo1)))
+(defvar testcases-2
+  '(((NIL abc) (T NIL T))
+    ((NIL :NORMAL) (T T T))
+    ((NIL :KILL) (T NIL T))
+    ((T abc) (T T T))
+    ((T :NORMAL) (T T T))
+    ((T :KILL) (T NIL T))))
 
-(defun test-demo2 ()
-  (let ((calls `(((NIL abc) . (T NIL T))
-		 ((NIL :NORMAL) . (T T T))
-		 ((NIL :KILL) . (T NIL T))
-		 ((T abc) . (T T T))
-		 ((T :NORMAL) . (T T T))
-		 ((T :KILL) . (T NIL T)))))
-    (run-tests calls #'run-demo2)))
+(test demo-1
+  (dolist (case testcases-1)
+    (is (equalp (apply #'demo-1 (car case))
+		(cadr case)))))
+
+(test demo-2
+  (dolist (case testcases-2)
+    (is (equalp (apply #'demo-2 (car case))
+		(cadr case)))))

@@ -39,7 +39,7 @@
       (warn "some nodes still connected"))))
 
 (defun init-environment (&optional (start-root T) (timeout default-timeout))
-  (with-processes (register-current-thread))
+  (register-current-thread)
   (unless start-root
     (return-from init-environment))
   (when (root-alivep)

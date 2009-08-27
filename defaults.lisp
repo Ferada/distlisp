@@ -2,7 +2,7 @@
 
 (in-package #:distlisp)
 
-(defparameter default-format '(:utf-8 :eol-style :lf)
+(defparameter default-external-format '(:utf-8 :eol-style :lf)
   "Default format for all communications.")
 
 (defparameter default-timeout 3
