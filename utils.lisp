@@ -2,14 +2,6 @@
 
 (in-package #:distlisp)
 
-;; (defun make-counter (limit &optional (lower 0) (initial (1- limit)))
-;;   (when (>= lower limit)
-;;     (error "LIMIT has to be bigger than LOWER (~D >= ~D" lower limit))
-;;   (lambda () (if (= initial (1- limit)) (setf initial lower) (incf initial))))
-
-;; (defun counter-next (counter)
-;;   (funcall counter))
-
 (defun make-counter (limit &optional (lower 0) (initial (1- limit)))
   (when (>= lower limit)
     (error "LIMIT has to be bigger than LOWER (~D >= ~D" lower limit))

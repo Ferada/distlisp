@@ -26,26 +26,24 @@
 (defun map-exit (from reason pids)
   (mapcar (lambda (pid) (send-exit pid reason from)) pids))
 
+(defun %link (to &optional (process *current-process*)
+	      &aux (pid (slot-value process 'pid)))
+  (aif (pid-node to)
+       (progn (send-list (make-root-pid it) pid :LINK (pid-id to))
+	      (%receive-if ))
+       (awhen (with-processes (find-process to))
+	 (with-process-lock process
+	   (with-process-lock it
+	     (link-processes process pid it to))))))
 
-(progn
-  (defun %link (to &optional (process *current-process*)
+(defun %unlink (to &optional (process *current-process*)
 		&aux (pid (slot-value process 'pid)))
-    (aif (pid-node to)
-	 (progn (send-list (make-root-pid it) pid :LINK (pid-id to))
-		(%receive-if ))
-	 (awhen (with-processes (find-process to))
-	   (with-process-lock process
-	     (with-process-lock it
-	       (link-processes process pid it to))))))
-
-  (defun %unlink (to &optional (process *current-process*)
-		  &aux (pid (slot-value process 'pid)))
-    (aif (pid-node to)
-	 (send-list (make-root-pid it) pid :UNLINK (pid-id to))
-	 (awhen (with-processes (find-process to))
-	   (with-process-lock process
-	     (with-process-lock it
-	       (unlink-processes process pid it to)))))))
+  (aif (pid-node to)
+       (send-list (make-root-pid it) pid :UNLINK (pid-id to))
+       (awhen (with-processes (find-process to))
+	 (with-process-lock process
+	   (with-process-lock it
+	     (unlink-processes process pid it to))))))
 
 (defun unlink (pid)
   (%unlink pid))
