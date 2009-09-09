@@ -1,6 +1,6 @@
 ;;; -*- mode: lisp; syntax: common-lisp; coding: utf-8; package: distlisp; -*-
 
-(in-package #:distlisp)
+(in-package :distlisp)
 
 (defparameter default-external-format '(:utf-8 :eol-style :lf)
   "Default format for all communications.")

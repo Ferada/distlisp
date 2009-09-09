@@ -1,6 +1,6 @@
 ;;; -*- mode: lisp; syntax: common-lisp; coding: utf-8; package: distlisp; -*-
 
-(in-package #:distlisp)
+(in-package :distlisp)
 
 (let ((sync (make-condition-variable)))
   (defun spawn-thread (fun &key linked monitored traps-exit

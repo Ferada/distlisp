@@ -1,6 +1,6 @@
 ;;; -*- mode: lisp; syntax: common-lisp; coding: utf-8; package: distlisp; -*-
 
-(in-package #:distlisp)
+(in-package :distlisp)
 
 (defun current-indeque ()
   (mailbox-indeque (slot-value *current-process* 'mailbox)))

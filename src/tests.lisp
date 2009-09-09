@@ -1,11 +1,11 @@
-(in-package #:cl-user)
+(in-package :cl-user)
 
-(defpackage #:distlisp-tests
-  (:use #:cl #:utils-frahm #:anaphora #:distlisp #:fare-matcher
-	#:it.bese.FiveAM)
-  (:export #:run-tests))
+(defpackage distlisp-tests
+  (:use :cl :utils-frahm :anaphora :distlisp :fare-matcher
+	:it.bese.FiveAM)
+  (:export :run-tests))
 
-(in-package #:distlisp-tests)
+(in-package :distlisp-tests)
 
 (def-suite distlisp-suite)
 
@@ -109,11 +109,13 @@
     ((T :KILL) (T NIL T))))
 
 (test demo-1
+  (init-environment NIL)
   (dolist (case testcases-1)
     (is (equalp (apply #'demo-1 (car case))
 		(cadr case)))))
 
 (test demo-2
+  (init-environment NIL)
   (dolist (case testcases-2)
     (is (equalp (apply #'demo-2 (car case))
 		(cadr case)))))

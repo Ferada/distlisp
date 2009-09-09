@@ -2,7 +2,7 @@
 
 ;;;; method primitives
 
-(in-package #:distlisp)
+(in-package :distlisp)
 
 ;;; see encode.lisp
 

@@ -1,8 +1,13 @@
 ;;; -*- mode: lisp; syntax: common-lisp; coding: utf-8; package: cl-user; -*-
 
-(in-package #:cl-user)
+(in-package :cl-user)
 
-(asdf:defsystem :distlisp
+(defpackage distlisp-system
+  (:use :cl :asdf))
+
+(in-package :distlisp-system)
+
+(defsystem :distlisp
   :depends-on (:alexandria
 	       :cl-walker
 	       :cl-syntax-sugar
@@ -15,31 +20,36 @@
 	       :cl-store
 	       :trivial-timeout
 	       :fiveam)
-  :serial T
-  :components ((:file "package")
-	       (:file "defaults")
-	       (:file "globals")
-	       (:file "methods")
-	       (:file "utils")
-	       (:file "encode")
-	       (:file "process")
-	       (:file "receive")
-	       (:file "node")
-	       (:file "send")
-	       (:file "remote")
-	       (:file "spawn")
-	       (:file "server")
-	       (:file "environment")
-	       (:file "services")
-	       ))
+  :components ((:module src
+		:serial T
+		:components ((:file "package")
+			     (:file "defaults")
+			     (:file "globals")
+			     (:file "methods")
+			     (:file "utils")
+			     (:file "encode")
+			     (:file "process")
+			     (:file "receive")
+			     (:file "node")
+			     (:file "send")
+			     (:file "remote")
+			     (:file "spawn")
+			     (:file "server")
+			     (:file "environment")
+			     (:file "services")))))
 
-(asdf:defsystem :distlisp-tests
+(defsystem :distlisp-tests
   :depends-on (:distlisp :fiveam)
-  :components ((:file "test")))
+  :components ((:module src
+		:serial T
+		:components ((:file "tests")))))
 
-(defmethod asdf:perform ((op asdf:test-op) (system (eql (asdf:find-system :distlisp))))
-  (asdf:oos 'asdf:load-op :distlisp-tests)
-  (fiveam:run! 'distlisp-tests::distlisp-suite))
+(defmethod perform ((op test-op) (system (eql (find-system :distlisp))))
+  (operate 'load-op :distlisp-tests)
+  (operate 'test-op :distlisp-tests :force T))
 
-(defmethod asdf:operation-done-p ((op asdf:test-op) (system (eql (asdf:find-system :distlisp))))
-  nil)
+(defmethod perform ((op test-op) (system (eql (find-system :distlisp-tests))))
+  (or (every (symbol-function (intern (string :test-passed-p) (string :fiveam)))
+	     (funcall (intern (string :run!) (string :fiveam))
+		      (intern (string :distlisp-suite) (string :distlisp-tests))))
+      (error "test-op failed")))

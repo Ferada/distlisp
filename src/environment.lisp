@@ -1,6 +1,6 @@
 ;;; -*- mode: lisp; syntax: common-lisp; coding: utf-8; package: distlisp; -*-
 
-(in-package #:distlisp)
+(in-package :distlisp)
 
 (defun register-current-thread ()
   "Registers the current thread with the system (if not already registered).

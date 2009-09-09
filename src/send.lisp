@@ -1,6 +1,6 @@
 ;;; -*- mode: lisp; syntax: common-lisp; coding: utf-8; package: distlisp; -*-
 
-(in-package #:distlisp)
+(in-package :distlisp)
 
 (defun wrap-local (message from)
   "Wrap a message into a tuple (<MESSAGE> . FROM) for local delivery."
