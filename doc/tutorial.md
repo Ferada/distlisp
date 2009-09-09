@@ -28,6 +28,8 @@ send messages to them.
 
 ## Echo
 
+Let's start with a very simple example, an echo server:
+
 <code>
 * (defun start-echo ()
     (spawn (:local)
@@ -35,6 +37,13 @@ send messages to them.
         (send from msg)))))
 * (defvar echo (start-echo))
 </code>
+
+Spawn does the obvious thing, :LOCAL just specifies, that we want a
+local process in contrast to :REMOTE.  There might be other cases, but
+mostly, those are the useful ones for the time being.
+
+RECEIVE-LOOP loops forever, MSG and FROM are the symbols to which the
+values are bound during the enclosed block.
 
 START-ECHO spawns a new process and returns the PID to us.  This handle
 can now be used to send messages to the process; likewise, we can
