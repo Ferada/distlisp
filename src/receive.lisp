@@ -6,33 +6,47 @@
   (mailbox-indeque (slot-value *current-process* 'mailbox)))
 
 ;;; receiving messages variants
+(defun tuple-to-values (cons)
+  (when cons
+    (values (car cons) (cdr cons))))
 
-(defun %receive (&optional (deque (current-indeque)))
+(defun recv (&optional (deque (current-indeque)))
   "Gets the next message from the mailbox.  Blocks if none available."
-  (dequeue-wait deque))
+  (tuple-to-values (dequeue-wait deque)))
 
-(defun %receive-nowait (&optional (deque (current-indeque)))
+(defun recv-nowait (&optional (deque (current-indeque)))
   "Gets the next message from the mailbox.  Returns NIL if there's no message."
-  (dequeue deque))
+  (tuple-to-values (dequeue deque)))
 
-(defun %receive-if (test &optional (deque (current-indeque)))
+(defun recv-if (test &optional (deque (current-indeque)))
   "Gets the next matching message from the mailbox.  Blocks if none available."
-  (dequeue-wait-if deque (lambda (message) (funcall test (car message) (cdr message)))))
+  (tuple-to-values (dequeue-wait-if deque
+				    (lambda (msg)
+				      (funcall test (car msg) (cdr msg))))))
 
-(defun %receive-if-nowait (test &optional (deque (current-indeque)))
-  "Gets the next matching message from the mailbox.  Returns NIL if there's no message."
-  (dequeue-if deque (lambda (message) (funcall test (car message) (cdr message)))))
+(defun recv-if-nowait (test &optional (deque (current-indeque)))
+  "Gets the next matching message from the mailbox.  Returns NIL if there's
+no message."
+  (tuple-to-values (dequeue-if deque (lambda (msg)
+				       (funcall test (car msg) (cdr msg))))))
 
 ;;; derived macros
 
-(defmacro! receive-bind ((&optional (msg 'MSG) (from 'FROM)) &body body)
+(defmacro! receive-bind ((&optional (msg NIL msgp) (from NIL fromp)) &body body)
   "Receives a message, binding it to the variable in MSG, default MSG and
 the sender to the symbol in FROM, default FROM."
-  `(multiple-value-bind (,msg ,from) (%receive)
+  (unless msgp
+    (setf msg (intern (string :msg))))
+  (unless fromp
+    (setf from (intern (string :from))))
+  `(multiple-value-bind (,msg ,from) (recv)
      ,.body))
 
-(defmacro! receive-loop ((&optional (msg 'MSG) (from 'FROM)) &body body)
-  `(loop as ,g!recv = (%receive)
-      as ,msg = (car ,g!recv)
-      and ,from = (cdr ,g!recv)
-      do (progn ,.body)))
+(defmacro! receive-loop ((&optional (msg NIL msgp) (from NIL fromp)) &body body)
+  (unless msgp
+    (setf msg (intern (string :msg))))
+  (unless fromp
+    (setf from (intern (string :from))))
+  `(loop with ,msg and ,from
+      do (progn (multiple-value-setq (,msg ,from) (recv))
+		,.body)))

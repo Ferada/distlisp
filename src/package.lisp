@@ -7,10 +7,10 @@
   (:export :init-environment :stop-environment
 	   :spawn
 	   :%send
-	   :%receive :%receive-nowait :%receive-if :%receive-if-nowait
+	   :recv :recv-nowait :recv-if :recv-if-nowait
 	   :with-registered-service
 	   :register-current-thread
 	   :make-root-pid :pid-eq
-	   :receive-bind :receive-loop
+	   :receive-bind :receive-loop :receive
 	   :link :unlink
 	   :exit :kill))
