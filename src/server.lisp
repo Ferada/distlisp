@@ -37,6 +37,9 @@
 	  (:LINK)
 	  (:UNLINK)
 	  (:TRAP-EXIT)
+	  (:UNTRAP-EXIT)
+	  (:MONITOR)
+	  (:UNMONITOR)
 	  (:SPAWN (destructuring-bind (op linked monitored traps-exit fun)
 		      message
 		    (declare (ignore op))
