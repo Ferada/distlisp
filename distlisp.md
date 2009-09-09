@@ -12,7 +12,7 @@ threads can send messages to each other and spawn new threads.
 
 The extended API adds communication between nodes over network using
 {package iolib}.  The serialisation package is replaceable (by default
-the Lisp printer and {package cl-store} are supported.  Negotiation of
+the Lisp printer and {package cl-store} are supported).  Negotiation of
 the used package is supported via a short handshake protocol on each
 connection.  Connection encryption is currently supported via {package
 cl+ssl}.
@@ -29,14 +29,14 @@ Distlisp depends on a small number of core packages:
 - logv
 - utils-frahm
 - anaphora
-- fare-matcher
 - bordeaux-threads
 
 Additionally, the following packages are required for additional
 functionality:
 
-- cl+ssl
-- cl-store
+- fare-matcher (for a more convenient syntax for message matching)
+- cl+ssl (encryption support)
+- cl-store (additional serialisation format)
 
 ## Coding Conventions
 
@@ -71,8 +71,8 @@ There are two seperate protocols similiar to the two APIs.
 
 The first one is the local intra-node protocol.
 
-Every message here is wrapped in a cons cell, with the {fun car}
-containing the actual message and the {fun cdr} the sender PID, which
+Every message here is wrapped in a cons cell, with the {fun CAR}
+containing the actual message and the {fun CDR} the sender PID, which
 can be accessed with the receive functions.
 
 The second protocol is for inter-node communication.
@@ -94,3 +94,11 @@ are send.
 
 `:SPAWN` is used to create a new process on a remote node.  The answer
 is `:SPAWNED`.
+
+## Test coverage
+
+At the moment, there are two demos taken and rewritten from the book
+Programming Erlang to test signal handling, linking and process death.
+
+Test using multiple machines will be supplied, but have to be started
+manually.
