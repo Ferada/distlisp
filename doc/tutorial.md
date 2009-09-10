@@ -39,7 +39,7 @@ nodes and at the moment, there's no position independent encoding for
 nodes or PIDs (but it'll be added soon enough, since it is needed for
 more than two nodes anyway).
 
-## Echo
+## Echo Server
 
 Let's start with a very simple example, an echo server:
 
@@ -71,11 +71,20 @@ The `RECV` function has some variants to make life easier for us:
   criteria,
 * `RECV-IF-NOWAIT` does what you'd expect.
 
+Note that all of them return multiple values: the first is the received
+message, the second is the sender PID.
+
 Additionally, a number of macros implement common usage patterns:
 
 * `RECEIVE-BIND` is `RECV` with integrated `MULTIPLE-VALUE-BIND` for the
   message and the sender,
-* `RECEIVE-LOOP` also binds message and sender and then loops a code block,
+* `RECEIVE-LOOP` also binds message and sender and then loops a code
+  block,
+
+Both macros provide optional arguments to change the symbol the message
+and the sender are bound in the supplied body.  By default, both intern
+`MSG` and `FROM` in the current package.
+
 * `RECEIVE` is the all purpose macro with bells and whistles (integrates
   the (non-)blocking variants, timeout functionality (using
   `TRIVIAL-TIMEOUT`) and pattern matching using a decided library
@@ -85,9 +94,19 @@ Additionally, a number of macros implement common usage patterns:
 (mostly because it'd look ugly and also because PIDs should be regarded
 as opaque objects), but has a parameter to bind it to a user
 configurable symbol.  I'll be mostly using this macro in the next
-parts.
+parts.  Erlang style `when` guards should be and are (in case of
+`FARE-MATCHER` with `LIKE-WHEN`) provided by the matcher library.
 
-## Process Death
+### Sending Messages
+
+The `SEND` macro does not fail on purpose.  It returns `T` as long, as
+it has knowledge of the receiver at the current time.  If it doesn't, a
+warning is generated and `NIL` is returned.
+
+Obviously, only the return value `NIL` guarantees, that the message
+*wasn't* send; the return value `T` doesn't prove anything at all.
+
+### Process Death
 
 Now, the echo server doesn't have a stop button.  Although it's not very
 clean, `KILL` wraps (for the local case) a implementation dependant
@@ -99,3 +118,73 @@ also use this function to send an exit signal to remote processes.
 The optional parameter `REASON` can be used to indicate one important
 case: if it's set to `:KILL` (the default), the process is killed, even if
 it traps signals otherwise.
+
+## Dictionary Server
+
+Although it's probably not really idiomatic (Common) Lisp style, the
+next example uses only non-destructive / functional operations and
+recursion.  If a particular implementation doesn't provide tail
+recursion the stack will overflow at some point, so this style should
+only be used for educational purposes and for comparison with an
+equivalent Erlang solution.
+
+    * (defun dict (list)
+        (receive (:from sender)
+          (`(GET ,key)
+            (aif (assoc key list)
+                 (send sender `(OK ,it))
+                 (send sender 'ERROR))
+            (dict list))
+          (`(SET ,key ,value)
+            (send sender 'OK)
+            (let ((new `(,key . ,value)))
+              (dict (aif (assoc key list)
+                         (substitute new it list)
+                         (cons new list)))))
+          (`(REMOVE ,key)
+            (send sender 'OK)
+            (dict (remove key list :key #'car)))
+          ('QUIT
+            (send sender 'OK))
+          (other
+            (send sender 'ERROR)
+            (dict list))))
+
+    * (defun start-dict (&optional list)
+        (spawn ()
+          (dict list)))
+
+    * (recv-nowait)
+    > NIL
+
+    * (defvar dict (start-dict '((:FOO . 1) (:BAR . 2))))
+
+    * (send dict '(GET :FOO))
+    * (recv)
+    > (OK (:FOO . 1))
+
+    * (send dict '(SET :QUX 42))
+    * (send dict '(GET :QUX))
+    * (recv)
+    > OK
+    * (recv)
+    > (OK (:QUX . 42))
+
+    * (send dict '(REMOVE :QUX))
+    * (send dict '(GET :QUX))
+    * (recv)
+    > OK
+    * (recv)
+    > ERROR
+
+    * (send dict 'BLUB)
+    * (recv)
+    > ERROR
+
+    * (send dict 'QUIT)
+    * (recv)
+    > OK
+
+    * (send dict 'QUIT)
+    > WARNING: local process 4 not found, discarded
+    > NIL
