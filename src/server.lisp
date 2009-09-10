@@ -63,9 +63,12 @@
 		   (let ((to (make-pid :id pidto))
 			 (from (make-pid :id pidfrom :node node)))
 		     (unless (with-processes (route-local to from message))
+		       (warn "local process ~A not found, discarded" (pid-id to))
 		       ;; send error message back
 		       (with-nodes
-			 (route-remote from root-pid `(:NOPROCESS ,pidto)))))))
+			 (unless (route-remote from root-pid `(:NOPROCESS ,pidto))
+			   (warn "remote process ~A on node ~A not valid, discarded"
+				 (pid-id from) (pid-node from))))))))
 	 ;; if we get an error, save it, so linked process can examine it
 	 (error (e)
 	   (setf error e)))

@@ -12,18 +12,15 @@
 
 (defun route-remote (to from message)
   (let ((node (pid-node to)))
-    (if (valid-node? node)
-	(progn (write-node node (wrap-remote to from message))
-	       T)
-	(warn "remote process ~A on node ~A not valid, discarded"
-	      (pid-id to) node))))
+    (when (valid-node? node)
+      (write-node node (wrap-remote to from message))
+      T)))
 
 (defun route-local (to from message)
-  (aif (find-process to)
-       (progn (enqueue (mailbox-indeque (slot-value it 'mailbox))
-		       (wrap-local message from))
-	      T)
-       (warn "local process ~A not found, discarded" (pid-id to))))
+  (awhen (find-process to)
+    (enqueue (mailbox-indeque (slot-value it 'mailbox))
+	     (wrap-local message from))
+    T))
 
 (defun %send (to message &optional (from *current-pid*))
   "Queues a message for asynchronously sending it to another process."
