@@ -1,4 +1,4 @@
-{comment -*- mode: markdown; mode: auto-fill; fill-column: 72; -*- }
+<!-- -*- mode: markdown; mode: auto-fill; fill-column: 72; -*- -->
 
 # Distlisp
 
@@ -11,11 +11,10 @@ is, one Lisp application.  Using {package bordeaux-threads} multiple
 threads can send messages to each other and spawn new threads.
 
 The extended API adds communication between nodes over network using
-{package iolib}.  The serialisation package is replaceable (by default
-the Lisp printer and {package cl-store} are supported).  Negotiation of
-the used package is supported via a short handshake protocol on each
-connection.  Connection encryption is currently supported via {package
-cl+ssl}.
+`IOLIB`.  The serialisation package is replaceable (by default the Lisp
+printer and {package cl-store} are supported).  Negotiation of the used
+package is supported via a short handshake protocol on each connection.
+Connection encryption is currently supported via `cl+ssl`.
 
 Additional error prevention can be added via message counters for
 inividual messages.
@@ -34,14 +33,15 @@ Distlisp depends on a small number of core packages:
 Additionally, the following packages are required for additional
 functionality:
 
-- fare-matcher (for a more convenient syntax for message matching)
-- cl+ssl (encryption support)
-- cl-store (additional serialisation format)
+- fare-matcher, for a more convenient syntax for message matching
+- cl+ssl, encryption support
+- cl-store, additional serialisation format
 
 ## Coding Conventions
 
 Helper functions, which are used in more general functions with the same
-intended functionality are marked with a prefixed percentage (`%`) symbol.
+intended functionality are marked with a prefixed percentage (`%`)
+symbol.
 
 Predicates are suffixed with a question mark rather than `p`.
 
@@ -50,8 +50,7 @@ global variables and locking.
 
 Library errors are signaled using the normal error handling facilities
 of Common Lisp; errors coming from other nodes can either be converted
-to normal messages or can be signaled on receiving (e.g. process
-death).
+to normal messages or can be signaled on receiving (e.g. process death).
 
 ## Basic API
 
@@ -59,11 +58,11 @@ Although in-memory message passing doesn't use serialisation, you
 shouldn't send possibly unserialisable objects, like closures, if you
 later want to extend your application to multiple nodes.
 
-The global variable {var *processes*} contains all local processes with
+The global variable `*processes*` contains all local processes with
 access to the message passing functionality.  It is only accessed with
-the lock {var *processes-lock*} held using {macro with-processes}.
+the lock `*processes-lock*` held using `with-processes`.
 
-Normal threads can be registered using {fun REGISTER-CURRENT-THREAD}.
+Normal threads can be registered using `REGISTER-CURRENT-THREAD`.
 
 ## Message Protocol
 
@@ -71,9 +70,9 @@ There are two seperate protocols similiar to the two APIs.
 
 The first one is the local intra-node protocol.
 
-Every message here is wrapped in a cons cell, with the {fun CAR}
-containing the actual message and the {fun CDR} the sender PID, which
-can be accessed with the receive functions.
+Every message here is wrapped in a cons cell, with the `CAR` containing
+the actual message and the `CDR` the sender PID, which can be accessed
+with the receive functions.
 
 The second protocol is for inter-node communication.
 
@@ -100,5 +99,5 @@ is `:SPAWNED`.
 At the moment, there are two demos taken and rewritten from the book
 Programming Erlang to test signal handling, linking and process death.
 
-Test using multiple machines will be supplied, but have to be started
+Tests using multiple machines will be supplied, but have to be started
 manually.
