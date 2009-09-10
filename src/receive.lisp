@@ -127,7 +127,7 @@ RECEIVE (:NOWAIT T (:AFTER 10 (error \"timeout\")))
 		(match ,g!msg
 		       ,.(mapcar (lambda (case)
 				   `(,(car case)
-				      (setf ,g!match (lambda () ,(cadr case))) T))
+				      (setf ,g!match (lambda () ,.(cdr case))) T))
 				 cases)))
 	      ;; this inserts the number of seconds for the timeout, if
 	      ;; necessary
