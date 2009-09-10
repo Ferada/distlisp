@@ -2,11 +2,11 @@
 
 # Distlisp Tutorial
 
-This document contains some examples how to use the Distlisp library.
+This document contains some examples on how to use the Distlisp library.
 If you already know Erlang, you'll see similarities when some things
-behave in a special way (e.g. process signals).
+behave in a special way (e.g. process signals, linking and monitoring).
 
-Other than that, you'll probably need good knowledge of Lisp.
+Other than that, you'll probably need a fair knowledge of Lisp.
 
 ## Preparations
 
@@ -27,7 +27,17 @@ Next, we have to initialise the environment:
 
 The first parameter disables the server mode, which would allow other
 nodes to connect to us.  After this call, we can spawn new processes and
-send messages to them.
+send messages to them.  As a sidenote, you can only register one thread
+using this function, since it uses a global variable to hold the ID of
+the current thread, which is then rebound in newly spawned threads.
+
+A PID is a tuple of a node object (or NIL in the case of the local node)
+and a number, which identifies the process on the node.  Since the IDs
+are therefore values relative to our current node, they should just be
+opaque objects for you: sending them as messages has no meaning between
+nodes and at the moment, there's no position independent encoding for
+nodes or PIDs (but it'll be added soon enough, since it is needed for
+more than two nodes anyway).
 
 ## Echo
 
@@ -40,15 +50,16 @@ Let's start with a very simple example, an echo server:
     * (defvar echo (start-echo))
 
 Spawn does the obvious thing, `:LOCAL` just specifies that we want a
-local process (in contrast to `:REMOTE`).  There might be other cases,
-but mostly, those are the useful ones for the time being.
+local process (in contrast to `:REMOTE`).  There might be other options,
+but mostly, those are the two useful ones for the time being.
 
-`RECEIVE-LOOP` loops forever, MSG and FROM are the symbols to which the
-values are bound during the enclosed block.
+`RECEIVE-LOOP` loops forever receiving messages; MSG and FROM are the
+symbols to which the values are bound during the enclosed block.
 
-`START-ECHO` spawns a new process and returns the PID to us.  This
-handle can now be used to send messages to the process; likewise, we can
-examine our message buffer and receive new messages:
+When invoked, `START-ECHO` spawns a new process and returns the PID to
+us.  This handle can now be used to send messages to the process;
+likewise, we can examine our own message buffer and receive new
+messages:
 
     * (send echo 'hello-world)
     * (recv)
