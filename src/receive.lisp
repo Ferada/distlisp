@@ -74,14 +74,15 @@ the sender to the symbol in FROM, default FROM."
        else collect (cons arg (pop args))
        else collect arg)))
 
-(defun maybe-wrap-after (block after form)
-  (unless after
-    (return-from maybe-wrap-after form))
-  (destructuring-bind (timeout &body body) after
-    (declare (ignore timeout))
-    `(handler-case ,form
-       (trivial-timeout:timeout-error ()
-	 (return-from ,block (progn ,.body))))))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun maybe-wrap-after (block after form)
+    (unless after
+      (return-from maybe-wrap-after form))
+    (destructuring-bind (timeout &body body) after
+      (declare (ignore timeout))
+      `(handler-case ,form
+	 (trivial-timeout:timeout-error ()
+	   (return-from ,block (progn ,.body)))))))
 
 ;;; at the moment, this is horribly inefficient (although, that goes for
 ;;; the matcher even more so)
