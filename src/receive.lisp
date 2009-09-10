@@ -50,3 +50,26 @@ the sender to the symbol in FROM, default FROM."
   `(loop with ,msg and ,from
       do (progn (multiple-value-setq (,msg ,from) (recv))
 		,.body)))
+
+;;; at the moment, this is horribly inefficient (although, that goes for
+;;; the matcher even more so)
+
+;;; if we can hook into the matcher, we could get the variables in question
+;;; so we don't have to create closures
+
+;; (receive
+;;   ((`,x ,y) (logv x y))
+;;   (other (logv other)))
+
+(defmacro! receive (&body cases)
+  "Receives messages matching at least one case."
+  `(let (,g!match)
+     (case (recv-if (lambda (,g!msg ,g!from)
+		      (declare (ignore ,g!from))
+		      (match ,g!msg
+			     ,.(mapcar (lambda (case)
+					 `(,(car case)
+					    (setf ,g!match (lambda () ,(cadr case))) T))
+				       cases)))))
+     (when ,g!match
+       (funcall ,g!match))))

@@ -49,4 +49,5 @@
 
 ;;; derived macros
 
-;; (defmacro send (pid message-constructor))
+(defmacro! send (to message)
+  `(%send ,to ,message))

@@ -6,7 +6,7 @@
   (:use :cl :logv :utils-frahm :anaphora :fare-matcher :bordeaux-threads)
   (:export :init-environment :stop-environment
 	   :spawn
-	   :%send
+	   :send
 	   :recv :recv-nowait :recv-if :recv-if-nowait
 	   :with-registered-service
 	   :register-current-thread
