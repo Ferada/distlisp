@@ -77,8 +77,15 @@ Additionally, a number of macros implement common usage patterns:
   message and the sender,
 * `RECEIVE-LOOP` also binds message and sender and then loops a code block,
 * `RECEIVE` is the all purpose macro with bells and whistles (integrates
-  the (non-)blocking variants, timeout functionality and pattern
-  matching using a pattern matching library (usally `FARE-MATCHER`).
+  the (non-)blocking variants, timeout functionality (using
+  `TRIVIAL-TIMEOUT`) and pattern matching using a decided library
+  (usally `FARE-MATCHER`, but I try to keep this tweakable).
+
+`RECEIVE` doesn't have syntax for matching the sender of a message
+(mostly because it'd look ugly and also because PIDs should be regarded
+as opaque objects), but has a parameter to bind it to a user
+configurable symbol.  I'll be mostly using this macro in the next
+parts.
 
 ## Process Death
 
