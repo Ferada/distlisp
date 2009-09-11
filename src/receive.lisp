@@ -93,51 +93,49 @@ the sender to the symbol in FROM, default FROM."
 (defmacro! receive (options &rest cases)
   "Receives messages matching at least one case.
 
-:NOWAIT BOOLEAN
-:AFTER NUMBER FORM*
-:FROM SYMBOL
+Combines several functions using the supplied OPTIONS, which can be a
+combination of the following parameters:
 
-RECEIVE (:NOWAIT T (:AFTER 10 (error \"timeout\")))
-        (x x)
-"
+:NOWAIT BOOLEAN, uses non-blocking receive operation,
+:AFTER NUMBER FORM*, runs the FORM* after a timeout of NUMBER seconds,
+:FROM SYMBOL, binds the sender PID to the supplied symbol.
+
+Could be used as follows:
+
+(RECEIVE (:NOWAIT T (:AFTER 10 (error \"timeout\")))
+  (x x))"
   (setf options (parse-extended-lambda-arguments options))
-  (let ((from (awhen (assoc :from options)
-		(cdr it)))
-	(nowait (awhen (assoc :nowait options)
-		  (cdr it)))
-	(after (awhen (assoc :after options)
-		 (cdr it))))
-    (when (and nowait after)
-      (warn "ignoring option AFTER because NOWAIT is set"))
-    `(block ,g!block
-       (let (,g!match ,.(awhen from
-			  (list from)))
-	 ,(maybe-wrap-after
-	   g!block
-	   after
-	   `(,(if nowait
-		  'recv-if-nowait
-		  (if after
-		      'recv-if-timeout
-		      'recv-if))
-	      (lambda (,g!msg ,g!from)
-		(declare (ignorable ,g!from))
-		,.(when from
-		    `((setf ,from ,g!from)))
-		(match ,g!msg
-		       ,.(mapcar (lambda (case)
-				   `(,(car case)
-				      (setf ,g!match (lambda () ,.(cdr case))) T))
-				 cases)))
-	      ;; this inserts the number of seconds for the timeout, if
-	      ;; necessary
-	      ,.(when (and (not nowait) after)
-		  (list (car after)))))
-	 (when ,g!match
-	   (funcall ,g!match))))))
-
-;; (receive (:nowait NIL (:after 3 'blub) :from from)
-;;   (`(,x ,y)
-;;     (logv x y from))
-;;   (other
-;;    (logv other)))
+  (flet ((option (option)
+	   (awhen (assoc option options)
+	     (cdr it))))
+    (let ((from (option :from))
+	  (nowait (option :nowait))
+	  (after (option :after)))
+      (when (and nowait after)
+	(warn "ignoring option AFTER because NOWAIT is set"))
+      `(block ,g!block
+	 (let (,g!match ,.(awhen from
+			    (list from)))
+	   ,(maybe-wrap-after
+	     g!block
+	     after
+	     `(,(if nowait
+		    'recv-if-nowait
+		    (if after
+			'recv-if-timeout
+			'recv-if))
+		(lambda (,g!msg ,g!from)
+		  (declare (ignorable ,g!from))
+		  ,.(when from
+		      `((setf ,from ,g!from)))
+		  (match ,g!msg
+			 ,.(mapcar (lambda (case)
+				     `(,(car case)
+					(setf ,g!match (lambda () ,.(cdr case))) T))
+				   cases)))
+		;; this inserts the number of seconds for the timeout, if
+		;; necessary
+		,.(when (and (not nowait) after)
+		    (list (car after)))))
+	   (when ,g!match
+	     (funcall ,g!match)))))))
