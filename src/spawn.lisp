@@ -79,9 +79,10 @@
 spawned process."
   (let ((pid (make-root-pid node)))
     (send-list pid *current-pid* :SPAWN linked monitored traps-exit fun)
-    (let ((remote (cdr (%receive-if (lambda (message from)
-				      (and (eq (car message) :SPAWNED)
-					   (pid-eq pid from)))))))
+    (multiple-value-bind (msg remote)
+	(recv-if (lambda (message from)
+		   (and (eq (car message) :SPAWNED)
+			(pid-eq pid from))))
       (with-process-lock *current-process*
 	(when linked
 	  (add-to-linked-set *current-process* remote))

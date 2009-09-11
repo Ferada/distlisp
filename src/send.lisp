@@ -39,9 +39,9 @@
 #+noway
 (defun send-command-verify ()
   (when (%send to `(:COMMAND ,token ,.args))
-    (%receive-if (lambda (message from)
-		   (and (eq :RESPONSE (first message))
-			(eq token (second message)))))
+    (recv-if (lambda (message from)
+	       (and (eq :RESPONSE (first message))
+		    (eq token (second message)))))
     T))
 
 ;;; derived macros

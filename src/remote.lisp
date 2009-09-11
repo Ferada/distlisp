@@ -29,8 +29,7 @@
 (defun %link (to &optional (process *current-process*)
 	      &aux (pid (slot-value process 'pid)))
   (aif (pid-node to)
-       (progn (send-list (make-root-pid it) pid :LINK (pid-id to))
-	      (%receive-if ))
+       (send-list (make-root-pid it) pid :LINK (pid-id to))
        (awhen (with-processes (find-process to))
 	 (with-process-lock process
 	   (with-process-lock it

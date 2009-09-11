@@ -4,7 +4,7 @@
 
 (defun register-service (name &optional (pid *current-pid*))
   (with-services
-    (push `(,name . ,pid) *services*)))
+    (push (cons name pid) *services*)))
 
 (defun unregister-service (&optional (pid *current-pid*))
   (with-services
@@ -19,7 +19,7 @@
 
 (defun list-services (node)
   (let ((pid (make-root-pid node)))
-    (%send pid :LIST-SERVICES)
-    (car (%receive-if (lambda (message from)
-			(and (eq (car message) :SERVICES)
-			     (pid-eq from pid)))))))
+    (send pid :LIST-SERVICES)
+    (car (recv-if (lambda (message from)
+		    (and (eq (car message) :SERVICES)
+			 (pid-eq from pid)))))))
